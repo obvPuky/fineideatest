@@ -253,19 +253,39 @@ document.getElementById('enter').addEventListener('click', () => {
   });
 })();
 
+// After you deploy the Cloudflare Worker (see cloudflare-worker/README.md),
+// paste its URL here. Until then, this falls back to Claude's own connection
+// when the page is opened via the published Claude link.
+const WORKER_URL = 'https://fineidea-council.YOUR-SUBDOMAIN.workers.dev';
+
 let sample = null;
-(async () => {
-  try { sample = await claude.use("sample"); } catch(e) { sample = null; }
-  if (!sample) {
-    document.getElementById('err').style.display = 'block';
-    document.getElementById('err').textContent = "Couldn't connect — try reloading this page, or make sure you're signed in to Claude.";
-    document.getElementById('go').disabled = true;
-  }
-})();
 
 const btn = document.getElementById('go');
 const ideaEl = document.getElementById('idea');
 const errEl = document.getElementById('err');
+
+(async () => {
+  try { sample = (window.claude && await claude.use("sample")) || null; } catch(e) { sample = null; }
+})();
+
+async function callModel(prompt, onChunk){
+  if (sample) {
+    const { text } = await sample(prompt, { modelTier: "default", onText: ({text}) => onChunk(text) });
+    return text;
+  }
+  const res = await fetch(WORKER_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt })
+  });
+  if (!res.ok) {
+    const errBody = await res.text().catch(()=> '');
+    throw new Error('worker error ' + res.status + ' ' + errBody.slice(0,200));
+  }
+  const data = await res.json();
+  onChunk(data.text);
+  return data.text;
+}
 
 function setThinking(id, colorVar){
   document.getElementById(id).innerHTML =
@@ -280,11 +300,11 @@ function setBody(id, text){
 
 async function runVoice(id, prompt){
   try{
-    const { text } = await sample(prompt, { modelTier: "default", onText: ({text}) => setBody(id, text) });
+    const text = await callModel(prompt, (t) => setBody(id, t));
     setBody(id, text);
     return text;
   }catch(e){
-    setBody(id, "(couldn't get a response — try again)");
+    setBody(id, "(couldn't get a response — check the Worker URL is set and try again)");
     return null;
   }
 }
